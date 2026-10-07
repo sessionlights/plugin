@@ -1,0 +1,11 @@
+{
+  "name": "sessionlights",
+  "owner": { "name": "Session Lights" },
+  "plugins": [
+    {
+      "name": "lights",
+      "description": "Live iPhone widget and Live Activity for your Claude Code sessions.",
+      "source": "./"
+    }
+  ]
+}

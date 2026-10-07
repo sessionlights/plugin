@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" SessionStart", "async": true, "timeout": 30 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" UserPromptSubmit", "asyncRewake": true, "timeout": 691200 }] }],
+    "PreToolUse": [{ "matcher": "AskUserQuestion|ExitPlanMode", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" PreToolUse", "async": true, "timeout": 30 }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" PermissionRequest", "async": true, "timeout": 30 }] }],
+    "Elicitation": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" Elicitation", "async": true, "timeout": 30 }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" PostToolUse", "asyncRewake": true, "timeout": 691200 }] }],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" PostToolUseFailure", "async": true, "timeout": 30 }] }],
+    "PermissionDenied": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" PermissionDenied", "async": true, "timeout": 30 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" Stop", "async": true, "timeout": 90 }] }],
+    "StopFailure": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" StopFailure", "async": true, "timeout": 30 }] }],
+    "Notification": [{ "matcher": "quota_auto_resume_fired|quota_auto_resume_stale|quota_auto_resume_disabled", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" Notification", "async": true, "timeout": 30 }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/report.mjs\" SessionEnd", "async": true, "timeout": 30 }] }]
+  }
+}
