@@ -1,6 +1,7 @@
 {
   "name": "sessionlights",
   "owner": { "name": "Session Lights" },
+  "description": "Session Lights: a live iPhone widget for your Claude Code chats.",
   "plugins": [
     {
       "name": "lights",
