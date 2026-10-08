@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Claude Code hook -> per-session state -> relay -> iPhone.
 // Usage: report.mjs <HookEvent>   (hook payload on stdin)
+//        report.mjs statusline    (Claude Code's statusLine command: saves the plan's usage for the widget)
 //        report.mjs sweep         (launchd, every 10s: drop dead sessions, fix interrupted turns)
 // Every hook runs async, so nothing here ever slows a session down.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 if (process.env.CLAUDE_WIDGET_CHILD) process.exit(0); // the classifier's own `claude -p` run
@@ -17,6 +18,7 @@ const DIR = process.env.CLAUDE_WIDGET_DIR || path.join(HOME, '.claude-widget');
 const STATES = path.join(DIR, 'sessions');
 const CC_SESSIONS = process.env.CLAUDE_WIDGET_SESSIONS_DIR /* tests */ || path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude'), 'sessions');
 const LIMIT_FILE = path.join(DIR, 'limit.json');
+const USAGE_FILE = path.join(DIR, 'usage.json');
 const config = readJSON(path.join(DIR, 'config.json')) || {};
 const RELAY = process.env.CLAUDE_WIDGET_RELAY || config.relay || 'https://claudewidget.emunasites.com';
 const LINE_MAX = 80;
@@ -110,6 +112,32 @@ function currentLimit() {
   if (!limit) return null;
   if (limit.resetsAt && limit.resetsAt <= Date.now()) { fs.rmSync(LIMIT_FILE, { force: true }); return null; }
   return limit;
+}
+
+// ---- usage bars ----------------------------------------------------------------
+// Only the status line is told how much of the plan is used (rate_limits), so the person points
+// Claude Code's statusLine setting here. It saves the numbers for the next publish and prints a
+// status line: the person's own one (config.statusLineCommand), or a short usage line.
+function statusLine(raw) {
+  let data = {};
+  try { data = JSON.parse(raw || '{}'); } catch { /* still print something */ }
+  const win = (w) => (typeof w?.used_percentage === 'number'
+    ? { pct: Math.round(w.used_percentage), resetsAt: w.resets_at ? w.resets_at * 1000 : null } : null);
+  const usage = { fiveHour: win(data.rate_limits?.five_hour), sevenDay: win(data.rate_limits?.seven_day) };
+  if (usage.fiveHour || usage.sevenDay) writeJSON(USAGE_FILE, usage);
+  if (config.statusLineCommand) {
+    process.stdout.write(spawnSync(config.statusLineCommand, { shell: true, input: raw, encoding: 'utf8', timeout: 5000 }).stdout || '');
+  } else {
+    process.stdout.write([data.model?.display_name, usage.fiveHour && `5h ${usage.fiveHour.pct}%`,
+      usage.sevenDay && `week ${usage.sevenDay.pct}%`].filter(Boolean).join(' · '));
+  }
+}
+// A window whose reset has passed is back to 0% (Claude Code just stops reporting it).
+function currentUsage() {
+  const u = readJSON(USAGE_FILE);
+  if (!u) return null;
+  const now = (w) => (w && w.resetsAt && w.resetsAt <= Date.now() ? { pct: 0, resetsAt: null } : w || null);
+  return { fiveHour: now(u.fiveHour), sevenDay: now(u.sevenDay) };
 }
 
 // ---- hook events -------------------------------------------------------------
@@ -218,7 +246,7 @@ async function publish() {
   const { sessions, limit } = snapshot();
   const secret = readSecret();
   if (!secret) return; // not paired yet: local state is still kept
-  const body = JSON.stringify({ v: 1, sessions, limit });
+  const body = JSON.stringify({ v: 1, sessions, limit, usage: currentUsage() });
   const hash = crypto.createHash('sha256').update(body).digest('hex');
   const lastFile = path.join(DIR, 'last-sent');
   let last = '';
@@ -306,6 +334,10 @@ async function watchTurn(sid) {
 if (event === 'sweep') {
   sweep();
   await publish();
+} else if (event === 'statusline') {
+  let raw = '';
+  for await (const chunk of process.stdin) raw += chunk;
+  statusLine(raw);
 } else if (event) {
   let raw = '';
   for await (const chunk of process.stdin) raw += chunk;
