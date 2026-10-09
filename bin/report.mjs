@@ -214,9 +214,11 @@ function snapshot() {
   const limit = currentLimit();
   let files = [];
   try { files = fs.readdirSync(CC_SESSIONS).filter((f) => f.endsWith('.json')); } catch { /* no sessions yet */ }
-  for (const f of files) {
-    const cc = readJSON(path.join(CC_SESSIONS, f));
-    if (!cc?.sessionId || !alive(cc.pid)) continue;
+  // Newest first: one chat open in two terminals (e.g. resumed twice) shows once, as its latest.
+  const open = files.map((f) => readJSON(path.join(CC_SESSIONS, f)))
+    .sort((a, b) => (b?.statusUpdatedAt || 0) - (a?.statusUpdatedAt || 0));
+  for (const cc of open) {
+    if (!cc?.sessionId || !alive(cc.pid) || liveIds.has(cc.sessionId)) continue;
     if (cc.kind && !['interactive', 'background'].includes(cc.kind)) continue;
     liveIds.add(cc.sessionId);
     let mine = readJSON(stateFile(cc.sessionId));
