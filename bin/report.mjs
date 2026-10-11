@@ -16,7 +16,10 @@ if (process.env.CLAUDE_WIDGET_CHILD) process.exit(0); // the classifier's own `c
 const HOME = os.homedir();
 const DIR = process.env.CLAUDE_WIDGET_DIR || path.join(HOME, '.claude-widget');
 const STATES = path.join(DIR, 'sessions');
-const CC_SESSIONS = process.env.CLAUDE_WIDGET_SESSIONS_DIR /* tests */ || path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude'), 'sessions');
+const CC_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude');
+const CC_SESSIONS = process.env.CLAUDE_WIDGET_SESSIONS_DIR /* tests */ || path.join(CC_DIR, 'sessions');
+const CC_PROJECTS = process.env.CLAUDE_WIDGET_PROJECTS_DIR /* tests */ || path.join(CC_DIR, 'projects');
+const TITLES_FILE = path.join(DIR, 'titles.json');
 const LIMIT_FILE = path.join(DIR, 'limit.json');
 const USAGE_FILE = path.join(DIR, 'usage.json');
 const config = readJSON(path.join(DIR, 'config.json')) || {};
@@ -207,6 +210,38 @@ async function handle(evt, p) {
   }
 }
 
+// ---- chat names --------------------------------------------------------------
+// A chat nobody named gets a folder-based name from Claude Code ("sammy-1b"), while the Claude app
+// shows the title Claude wrote for it ("Google Cloud free cap setup"). Show that title too. It's the
+// last "ai-title" line in the transcript, cached by the transcript's modified time.
+function lastTitle(file, maxBytes) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, maxBytes);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    fs.closeSync(fd);
+    for (const line of buf.toString('utf8').split('\n').reverse()) {
+      if (!line.includes('"ai-title"')) continue;
+      try { const title = JSON.parse(line).aiTitle; if (title) return String(title); } catch { /* cut-off first line */ }
+    }
+  } catch { /* no transcript yet */ }
+  return null;
+}
+
+function chatTitle(cc, titles) {
+  const file = path.join(CC_PROJECTS, String(cc.cwd || '').replace(/[^a-zA-Z0-9]/g, '-'), `${cc.sessionId}.jsonl`);
+  let mtime;
+  try { mtime = fs.statSync(file).mtimeMs; } catch { return null; }
+  const hit = titles[cc.sessionId];
+  if (hit?.mtime === mtime) return hit.title;
+  // First look reads the whole transcript (capped); after that only the newest part.
+  const title = lastTitle(file, hit ? 256 * 1024 : 64 * 1024 * 1024) || hit?.title || null;
+  titles[cc.sessionId] = { mtime, title };
+  return title;
+}
+
 // ---- what the phone sees -----------------------------------------------------
 function snapshot() {
   const sessions = [];
@@ -215,6 +250,8 @@ function snapshot() {
   let files = [];
   try { files = fs.readdirSync(CC_SESSIONS).filter((f) => f.endsWith('.json')); } catch { /* no sessions yet */ }
   // Newest first: one chat open in two terminals (e.g. resumed twice) shows once, as its latest.
+  const titles = readJSON(TITLES_FILE) || {};
+  const titlesBefore = JSON.stringify(titles);
   const open = files.map((f) => readJSON(path.join(CC_SESSIONS, f)))
     .sort((a, b) => (b?.statusUpdatedAt || 0) - (a?.statusUpdatedAt || 0));
   for (const cc of open) {
@@ -233,7 +270,7 @@ function snapshot() {
     const state = mine?.state || (cc.status === 'busy' ? 'busy' : 'idle');
     sessions.push({
       id: cc.sessionId,
-      name: cc.name || path.basename(cc.cwd || '') || 'Session',
+      name: (cc.nameSource !== 'user' && chatTitle(cc, titles)) || cc.name || path.basename(cc.cwd || '') || 'Session',
       state,
       line: config.hideLines ? '' : (mine?.line || ''),
       since: mine?.updatedAt || cc.statusUpdatedAt || cc.startedAt,
@@ -241,6 +278,8 @@ function snapshot() {
     });
   }
   sessions.sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.since - a.since);
+  for (const id of Object.keys(titles)) if (!liveIds.has(id)) delete titles[id];
+  if (JSON.stringify(titles) !== titlesBefore) writeJSON(TITLES_FILE, titles);
   return { sessions, liveIds, limit };
 }
 
