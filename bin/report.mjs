@@ -2,7 +2,8 @@
 // Claude Code hook -> per-session state -> relay -> iPhone.
 // Usage: report.mjs <HookEvent>   (hook payload on stdin)
 //        report.mjs statusline    (Claude Code's statusLine command: saves the plan's usage for the widget)
-//        report.mjs sweep         (launchd, every 10s: drop dead sessions, fix interrupted turns)
+//        report.mjs usage-setup   (run by the person once: turns that status line on)
+//        report.mjs sweep        (launchd, every 10s: drop dead sessions, fix interrupted turns)
 // Every hook runs async, so nothing here ever slows a session down.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -143,6 +144,34 @@ function currentUsage() {
   return { fiveHour: now(u.fiveHour), sevenDay: now(u.sevenDay) };
 }
 
+// `report.mjs usage-setup`, run by the person from Terminal: points Claude Code's status line here.
+// The only time Session Lights changes Claude Code's settings, and only when asked. A status line
+// they already had keeps showing (moved to config.statusLineCommand); a backup is left next to it.
+function usageSetup() {
+  const file = path.join(CC_DIR, 'settings.json');
+  let settings = {};
+  if (fs.existsSync(file)) {
+    try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {
+      console.log(`${file} isn't valid JSON, so nothing was changed. Fix it, then run this again.`);
+      return 1;
+    }
+  }
+  const current = settings.statusLine?.command;
+  if (/report\.mjs"? statusline/.test(current || '')) {
+    console.log('Usage bars are already on. Send a message in any Claude Code chat and they fill in.');
+    return 0;
+  }
+  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.before-session-lights`);
+  if (current) writeJSON(path.join(DIR, 'config.json'), { ...config, statusLineCommand: current });
+  settings.statusLine = { type: 'command', command: `node "${path.join(DIR, 'report.mjs')}" statusline` };
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`);
+  fs.renameSync(tmp, file);
+  console.log(`Usage bars are on.${current ? ' Your own status line still shows.' : ''}
+Send a message in any Claude Code chat (or start a new one): the bars fill in within a minute.`);
+  return 0;
+}
+
 // ---- hook events -------------------------------------------------------------
 async function handle(evt, p) {
   const sid = p.session_id;
@@ -257,6 +286,8 @@ function snapshot() {
   for (const cc of open) {
     if (!cc?.sessionId || !alive(cc.pid) || liveIds.has(cc.sessionId)) continue;
     if (cc.kind && !['interactive', 'background'].includes(cc.kind)) continue;
+    // `claude -p` and Agent SDK runs (scripts, scheduled jobs, our own classifier) aren't chats.
+    if (String(cc.entrypoint || '').startsWith('sdk')) continue;
     liveIds.add(cc.sessionId);
     let mine = readJSON(stateFile(cc.sessionId));
     // No Stop hook fires when a turn is interrupted (Esc): trust Claude Code's own idle status if it's newer.
@@ -375,6 +406,8 @@ async function watchTurn(sid) {
 if (event === 'sweep') {
   sweep();
   await publish();
+} else if (event === 'usage-setup') {
+  process.exitCode = usageSetup();
 } else if (event === 'statusline') {
   let raw = '';
   for await (const chunk of process.stdin) raw += chunk;

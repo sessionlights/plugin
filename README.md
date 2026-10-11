@@ -22,13 +22,13 @@ Type the code it shows into the Session Lights iPhone app.
 
 ## Usage bars (optional)
 
-The widget can show how much of your 5-hour and weekly limits you've used. Claude Code only gives those numbers to the status line, so point yours at Session Lights by adding this to `~/.claude/settings.json`:
+The widget can show how much of your 5-hour and weekly limits you've used. Claude Code only gives those numbers to the status line, so Session Lights needs to be your status line command. Turn it on once, in Terminal:
 
-```json
-"statusLine": { "type": "command", "command": "node ~/.claude-widget/report.mjs statusline" }
+```
+node ~/.claude-widget/report.mjs usage-setup
 ```
 
-It prints a short `Opus · 5h 34% · week 12%` line. Already have a status line? Put its command in `~/.claude-widget/config.json` as `{"statusLineCommand": "<your command>"}` and Session Lights shows yours instead. The bars can be switched off in the iPhone app. They need a Pro or Max plan.
+It sets `statusLine` in `~/.claude/settings.json` (a backup is saved next to it as `settings.json.before-session-lights`) and changes nothing else. If you already had a status line, it keeps showing: its command moves to `~/.claude-widget/config.json` as `statusLineCommand`. Without one, Session Lights prints a short `Opus · 5h 34% · week 12%` line. The bars can be switched off in the iPhone app. They need a Pro or Max plan.
 
 ## What it does on your Mac
 
