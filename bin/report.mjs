@@ -288,6 +288,8 @@ function snapshot() {
     if (cc.kind && !['interactive', 'background'].includes(cc.kind)) continue;
     // `claude -p` and Agent SDK runs (scripts, scheduled jobs, our own classifier) aren't chats.
     if (String(cc.entrypoint || '').startsWith('sdk')) continue;
+    // Claude Projects helper sessions are auto-named like "palletos-6e" (project + 2 hex): not chats the person opened.
+    if (cc.nameSource === 'derived' && /^.+-[0-9a-f]{2}$/.test(cc.name || '')) continue;
     liveIds.add(cc.sessionId);
     let mine = readJSON(stateFile(cc.sessionId));
     // No Stop hook fires when a turn is interrupted (Esc): trust Claude Code's own idle status if it's newer.
