@@ -288,8 +288,9 @@ function snapshot() {
     if (cc.kind && !['interactive', 'background'].includes(cc.kind)) continue;
     // `claude -p` and Agent SDK runs (scripts, scheduled jobs, our own classifier) aren't chats.
     if (String(cc.entrypoint || '').startsWith('sdk')) continue;
-    // Claude Projects helper sessions are auto-named like "palletos-6e" (project + 2 hex): not chats the person opened.
-    if (cc.nameSource === 'derived' && /^.+-[0-9a-f]{2}$/.test(cc.name || '')) continue;
+    // Robot-run sessions (Claude Projects threads, scheduled jobs) get names like "t-9b" and no real title: not chats.
+    const title = cc.nameSource !== 'user' ? chatTitle(cc, titles) : null;
+    if (!title && cc.nameSource !== 'user' && /^t-[0-9a-f]{2,}$/.test(String(cc.name || ''))) continue;
     liveIds.add(cc.sessionId);
     let mine = readJSON(stateFile(cc.sessionId));
     // No Stop hook fires when a turn is interrupted (Esc): trust Claude Code's own idle status if it's newer.
@@ -303,7 +304,7 @@ function snapshot() {
     const state = mine?.state || (cc.status === 'busy' ? 'busy' : 'idle');
     sessions.push({
       id: cc.sessionId,
-      name: (cc.nameSource !== 'user' && chatTitle(cc, titles)) || cc.name || path.basename(cc.cwd || '') || 'Session',
+      name: title || cc.name || path.basename(cc.cwd || '') || 'Session',
       state,
       line: config.hideLines ? '' : (mine?.line || ''),
       since: mine?.updatedAt || cc.statusUpdatedAt || cc.startedAt,
