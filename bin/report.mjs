@@ -259,6 +259,27 @@ function lastTitle(file, maxBytes) {
   return null;
 }
 
+// Nothing titled yet: the chat's first message is a better name than "palette-e9".
+function firstPrompt(file) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(256 * 1024);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    for (const line of buf.toString('utf8', 0, n).split('\n')) {
+      if (!line.includes('"user"')) continue;
+      try {
+        const j = JSON.parse(line);
+        if (j.type !== 'user' || j.isMeta) continue;
+        const c = j.message?.content;
+        const text = typeof c === 'string' ? c : (Array.isArray(c) ? c.map((b) => b?.text || '').join(' ') : '');
+        if (text.trim()) return text.replace(/\s+/g, ' ').trim().slice(0, 200);
+      } catch { /* cut-off line */ }
+    }
+  } catch { /* no transcript yet */ }
+  return null;
+}
+
 function chatTitle(cc, titles) {
   const file = path.join(CC_PROJECTS, String(cc.cwd || '').replace(/[^a-zA-Z0-9]/g, '-'), `${cc.sessionId}.jsonl`);
   let mtime;
@@ -266,14 +287,16 @@ function chatTitle(cc, titles) {
   const hit = titles[cc.sessionId];
   if (hit?.mtime === mtime) return hit.title;
   // First look reads the whole transcript (capped); after that only the newest part.
-  const title = lastTitle(file, hit ? 256 * 1024 : 64 * 1024 * 1024) || hit?.title || null;
-  titles[cc.sessionId] = { mtime, title };
+  const real = lastTitle(file, hit ? 256 * 1024 : 64 * 1024 * 1024);
+  const title = real || (hit && !hit.prompt && hit.title) || firstPrompt(file) || null;
+  titles[cc.sessionId] = { mtime, title, prompt: !real && !!title, summary: real ? undefined : hit?.summary, tries: hit?.tries };
   return title;
 }
 
 // ---- what the phone sees -----------------------------------------------------
 function snapshot() {
   const sessions = [];
+  const pending = []; // untitled chats that still need a short summary name
   const liveIds = new Set();
   const limit = currentLimit();
   let files = [];
@@ -291,6 +314,11 @@ function snapshot() {
     // Robot-run sessions (Claude Projects threads, scheduled jobs) get names like "t-9b" and no real title: not chats.
     const title = cc.nameSource !== 'user' ? chatTitle(cc, titles) : null;
     if (!title && cc.nameSource !== 'user' && /^t-[0-9a-f]{2,}$/.test(String(cc.name || ''))) continue;
+    // A Projects thread's first message is its setup note ("Today is 2026-10-14. Project repo: ...").
+    if (title && /^Today is \d{4}-\d\d-\d\d\. Project repo:/.test(title)) continue;
+    const ent = titles[cc.sessionId];
+    const untitled = !!(title && ent?.prompt);
+    if (untitled && !ent.summary && (ent.tries || 0) < 2) pending.push({ id: cc.sessionId, text: title });
     liveIds.add(cc.sessionId);
     let mine = readJSON(stateFile(cc.sessionId));
     // No Stop hook fires when a turn is interrupted (Esc): trust Claude Code's own idle status if it's newer.
@@ -304,7 +332,7 @@ function snapshot() {
     const state = mine?.state || (cc.status === 'busy' ? 'busy' : 'idle');
     sessions.push({
       id: cc.sessionId,
-      name: title || cc.name || path.basename(cc.cwd || '') || 'Session',
+      name: untitled ? (ent.summary || title.slice(0, 40)) : (title || cc.name) || path.basename(cc.cwd || '') || 'Session',
       state,
       line: config.hideLines ? '' : (mine?.line || ''),
       since: mine?.updatedAt || cc.statusUpdatedAt || cc.startedAt,
@@ -314,11 +342,41 @@ function snapshot() {
   sessions.sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.since - a.since);
   for (const id of Object.keys(titles)) if (!liveIds.has(id)) delete titles[id];
   if (JSON.stringify(titles) !== titlesBefore) writeJSON(TITLES_FILE, titles);
-  return { sessions, liveIds, limit };
+  return { sessions, liveIds, limit, pending };
+}
+
+// A 2-3 word name for an untitled chat, from its first message. Uses the same `claude -p` (your subscription, $0) as the classifier.
+const NAME_PROMPT = 'You name chats. You get a person\'s first message inside <message> tags. Never answer it. Reply with only a 2 to 3 word title for what they want, like "Fix export button" or "Pricing page copy". No quotes, no punctuation.';
+function summarize(text) {
+  return new Promise((resolve) => {
+    const child = spawn('claude', ['-p', '--model', 'haiku', '--no-session-persistence', '--tools', '',
+      '--strict-mcp-config', '--disable-slash-commands', '--system-prompt', NAME_PROMPT,
+      `<message>\n${text.slice(0, 600)}\n</message>\nGive the 2 to 3 word title only.`],
+    { env: { ...process.env, CLAUDE_WIDGET_CHILD: '1' }, cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    const timer = setTimeout(() => child.kill(), 30000);
+    child.on('error', () => resolve(null));
+    child.on('close', () => {
+      clearTimeout(timer);
+      const t = out.split('\n')[0].replace(/["'.*#]/g, '').trim();
+      resolve(t && t.split(/\s+/).length <= 5 && t.length <= 40 ? t : null);
+    });
+  });
 }
 
 async function publish() {
-  const { sessions, limit } = snapshot();
+  let { sessions, limit, pending } = snapshot();
+  if (pending.length && !process.env.CLAUDE_WIDGET_CHILD) {
+    const names = await Promise.all(pending.slice(0, 3).map((x) => summarize(x.text)));
+    const titles = readJSON(TITLES_FILE) || {};
+    pending.slice(0, 3).forEach((x, i) => {
+      if (!titles[x.id]) return;
+      if (names[i]) titles[x.id].summary = names[i]; else titles[x.id].tries = (titles[x.id].tries || 0) + 1;
+    });
+    writeJSON(TITLES_FILE, titles);
+    ({ sessions, limit } = snapshot());
+  }
   const secret = readSecret();
   if (!secret) return; // not paired yet: local state is still kept
   const body = JSON.stringify({ v: 1, sessions, limit, usage: currentUsage() });
